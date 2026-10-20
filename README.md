@@ -1,2 +1,2 @@
 # paper2html
-A document-aided reading agent
+A paper-aided reading agent
