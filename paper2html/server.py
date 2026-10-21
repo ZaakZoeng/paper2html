@@ -182,6 +182,8 @@ def main(argv=None):
     parser.add_argument("--workers", type=int, choices=range(1, 5), default=2)
     parser.add_argument("--reports-dir", type=Path, default=Path("reports"))
     args = parser.parse_args(argv)
+    if not 0 <= args.port <= 65535:
+        parser.error('--port 必须为 0–65535；0 表示自动分配可用端口')
     os.umask(0o077)
     from .locking import directory_lock
     # Hold a cross-platform process lock before job recovery.
@@ -189,7 +191,14 @@ def main(argv=None):
     try:
         with directory_lock(args.data_dir/'.server.lock'):
             app = Application(args.data_dir, args.workers, args.reports_dir)
-            server = ThreadingHTTPServer(("127.0.0.1", args.port), handler_for(app))
+            try:
+                server = ThreadingHTTPServer(("127.0.0.1", args.port), handler_for(app))
+            except OSError as exc:
+                app.pool.shutdown(wait=True)
+                parser.exit(1, f'无法监听 127.0.0.1:{args.port}：{exc}\n'
+                            '该端口可能被占用、被系统保留或受到安全策略限制。\n'
+                            '请尝试 --port 18765，或 --port 0 自动分配端口；以启动后打印的 URL 为准。\n'
+                            'Windows 可运行 netsh interface ipv4 show excludedportrange protocol=tcp 检查保留范围。\n')
             app.store.recover()
             print(f"Read4MD / Paper2HTML: http://127.0.0.1:{server.server_port}", flush=True)
             print(f"报告目录: {app.store.reports}", flush=True)
