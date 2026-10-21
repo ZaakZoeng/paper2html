@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Paper2HTML · 论文阅读智能体</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
+<body>
+<header><a class="brand" href="/">Paper2HTML <span>基于 Read4MD</span></a><span class="badge">本地工作空间</span></header>
+<main>
+<section class="intro"><p class="eyebrow">从论文原文，到清晰的中文文章</p><h1>读懂一篇论文，<br>保留每一处依据。</h1><p>上传 PDF，连接你选择的模型 API。按页阅读、整理证据和完整图注，提取原图，生成带图片的 Markdown、独立 HTML 和整包 ZIP。</p></section>
+<div class="workspace">
+<form id="form" class="card">
+<div class="section-title"><span class="number">01</span><h2>选择论文</h2></div>
+<label class="upload" for="pdf"><strong>选择 PDF 文件</strong><span id="filename">可搜索的 PDF · 最大 25 MB / 150 页</span><input id="pdf" type="file" accept="application/pdf,.pdf" required></label>
+<div class="section-title"><span class="number">02</span><h2>连接模型</h2></div>
+<p class="hint">支持 Chat Completions 兼容接口。论文文本将发送到你填写的服务地址；启用视觉核对时也会发送相关论文页和原图。</p>
+<label>API Base URL<input id="base_url" type="url" placeholder="https://your-api.example/v1" required autocomplete="off"></label>
+<div class="fields"><label>模型名称<input id="model" placeholder="服务商提供的模型 ID" required autocomplete="off"></label><label>API Key<input id="api_key" type="password" placeholder="本机无鉴权服务可留空" autocomplete="off"></label></div>
+<p class="hint">密钥不写入任务文件或浏览器存储，刷新页面后需重新填写。</p>
+<details><summary>高级选项与补充出版信息</summary>
+<label>最大输出 token 数<input id="max_tokens" type="number" min="1024" max="32768" value="8000"></label>
+<label class="check"><input id="vision" type="checkbox" checked>视觉核对与复杂原图定位（模型须支持图片输入）</label>
+<label>配图计划（JSON，可选）<textarea id="figure_plan" rows="3" placeholder='{"figures":[{"source":"Figure 1","pdf_page":3,"clip":[50,80,550,500]}]}'></textarea></label>
+<p class="hint">纯文本 API 可关闭视觉核对。单张完整位图会自动提取；矢量或复合图需要提供已检查的区域。坐标使用 PDF 点。</p>
+<label class="check"><input id="json_mode" type="checkbox">接口支持 JSON mode（可选）</label>
+<label class="check"><input id="regenerate" type="checkbox">忽略已有结果，重新生成此论文</label>
+<label>补充出版信息（JSON，可选）<textarea id="metadata" rows="4" placeholder='{"publication_date":"20260101"}'></textarea></label>
+<p class="hint">仅在 PDF 缺失信息时填写。支持 title、authors、journal、journal_abbr、publication_date（YYYYMMDD）、doi、short_name。补充信息按用户提供记录，不视为原文已核实。</p>
+</details>
+<button id="submit" type="submit">开始阅读 <span>→</span></button><p id="error" role="alert"></p>
+</form>
+<aside class="card result"><div class="section-title"><span class="number">03</span><h2>阅读与结果</h2></div>
+<div id="empty"><div class="paper-icon">文</div><h3>一篇文章，一份证据清单</h3><p>处理进度会显示在这里。完成后可阅读文章，并下载 Markdown、HTML 和原文证据。</p><ul><li>保留 PDF 页码与逐字原文</li><li>整理主图与中文分面图注</li><li>区分研究结论与尚存局限</li></ul></div>
+<div id="progress" hidden><span id="status" class="badge"></span><h3 id="stage" aria-live="polite"></h3><p id="job-label" class="hint"></p><div id="busy" class="progress-track"><div></div></div><p id="job-error" role="alert"></p><ul id="warnings"></ul><div id="downloads" class="downloads"></div><p id="usage" class="hint"></p></div>
+<p class="review-note">自动校验检查格式、页码和引文匹配，不能代替对事实和翻译的人工核查。Markdown 引用 assets 原图，HTML 内嵌图片。建议下载整包 ZIP，以保留可编辑文章和图片。</p>
+</aside>
+</div>
+</main><footer>Paper2HTML · 让论文解读有据可查</footer>
+</body></html>
