@@ -23,12 +23,14 @@ def extract(pdf_path):
     metadata = {k: (v or "").strip() for k, v in document.metadata.items()}
     pages = []
     for index, page in enumerate(document):
-        text = normalize(page.get_text("text", sort=True))
+        # Preserve the PDF's reading order. Coordinate-based text reflow interleaves
+        # left/right columns line by line in Science and other two-column papers.
+        text = normalize(page.get_text("text", sort=False))
         pages.append({"page": index + 1, "chars": len(text), "text": text})
     first_pages = "\n".join(page["text"] for page in pages[:3])
     doi_match = DOI_RE.search(" ".join([metadata.get("subject", ""), first_pages]))
     subject = metadata.get("subject", "")
-    return {
+    result = {
         "source_pdf": str(pdf_path),
         "metadata": {
             "title": metadata.get("title", ""),
@@ -45,6 +47,8 @@ def extract(pdf_path):
         },
         "pages": pages,
     }
+    document.close()
+    return result
 
 
 def main():

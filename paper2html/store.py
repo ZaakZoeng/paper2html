@@ -41,6 +41,11 @@ class Store:
             row = db.execute("SELECT payload FROM jobs WHERE id=?", (job_id,)).fetchone()
         return json.loads(row[0]) if row else None
 
+    def list_jobs(self, limit=50):
+        with self.db() as db:
+            rows = db.execute('SELECT payload FROM jobs ORDER BY rowid DESC LIMIT ?', (limit,)).fetchall()
+        return [json.loads(row[0]) for row in rows]
+
     def update(self, job_id, **changes):
         with self.db() as db:
             row = db.execute("SELECT payload FROM jobs WHERE id=?", (job_id,)).fetchone()
@@ -65,5 +70,5 @@ class Store:
             rows = db.execute("SELECT id, payload FROM jobs").fetchall()
         for job_id, raw in rows:
             if json.loads(raw)["status"] in ("queued", "running"):
-                self.update(job_id, status="failed", stage="服务重启，任务中断", error="请重新提交 PDF 和 API 配置")
+                self.update(job_id, status="failed", stage="服务重启，任务中断", error="请重新提供 PDF 和相同 API 配置，并填写本任务 ID 续跑；旧版本任务需重新运行")
                 self.release(job_id)

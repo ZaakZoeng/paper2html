@@ -54,8 +54,8 @@ class FigureAgentTests(unittest.TestCase):
         self.assertTrue((folder/'assets'/'figure-1.png').exists())
         self.assertTrue((store.reports/result['canonical_name']/'bundle.json').exists())
         self.assertEqual(len(list(folder.glob('*.html'))),1)
-        review=json.loads((folder/'visual-review.json').read_text());self.assertTrue(review[0]['complete'])
-        page=(folder/(result['canonical_name']+'.html')).read_text()
+        review=json.loads((folder/'visual-review.json').read_text(encoding='utf-8'));self.assertTrue(review[0]['complete'])
+        page=(folder/(result['canonical_name']+'.html')).read_text(encoding='utf-8')
         self.assertIn('data:image/png;base64,',page)
         self.assertIn('color:#ffa900;',page) # 原文信息
         self.assertIn('border-left:4px solid #0396ff;',page)

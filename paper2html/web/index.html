@@ -14,13 +14,18 @@
 <label>API Base URL<input id="base_url" type="url" placeholder="https://your-api.example/v1" required autocomplete="off"></label>
 <div class="fields"><label>模型名称<input id="model" placeholder="服务商提供的模型 ID" required autocomplete="off"></label><label>API Key<input id="api_key" type="password" placeholder="本机无鉴权服务可留空" autocomplete="off"></label></div>
 <p class="hint">密钥不写入任务文件或浏览器存储，刷新页面后需重新填写。</p>
+<button id="test-api" type="button">测试连接与 JSON 输出（会调用一次模型）</button><p id="connection-status" class="hint" role="status"></p>
 <details><summary>高级选项与补充出版信息</summary>
 <label>最大输出 token 数<input id="max_tokens" type="number" min="1024" max="32768" value="8000"></label>
 <label class="check"><input id="vision" type="checkbox" checked>视觉核对与复杂原图定位（模型须支持图片输入）</label>
 <label>配图计划（JSON，可选）<textarea id="figure_plan" rows="3" placeholder='{"figures":[{"source":"Figure 1","pdf_page":3,"clip":[50,80,550,500]}]}'></textarea></label>
 <p class="hint">纯文本 API 可关闭视觉核对。单张完整位图会自动提取；矢量或复合图需要提供已检查的区域。坐标使用 PDF 点。</p>
 <label class="check"><input id="json_mode" type="checkbox">接口支持 JSON mode（可选）</label>
+<label class="check"><input id="metadata_lookup" type="checkbox" checked>PDF 缺少发表日期时查询 Crossref（仅发送 DOI，不发送论文或密钥）</label>
 <label class="check"><input id="regenerate" type="checkbox">忽略已有结果，重新生成此论文</label>
+<label class="check"><input id="independent" type="checkbox">独立对比运行（不替换已有报告，可比较不同 API）</label>
+<label>续跑失败任务 ID（可选）<input id="resume_from" autocomplete="off" placeholder="填写失败任务 ID，复用已通过校验的步骤"></label>
+<p class="hint">续跑需重新选择相同 PDF，并填写相同接口、模型、选项和补充信息；密钥可以重新提供。旧版本任务不支持续跑。</p>
 <label>补充出版信息（JSON，可选）<textarea id="metadata" rows="4" placeholder='{"publication_date":"20260101"}'></textarea></label>
 <p class="hint">仅在 PDF 缺失信息时填写。支持 title、authors、journal、journal_abbr、publication_date（YYYYMMDD）、doi、short_name。补充信息按用户提供记录，不视为原文已核实。</p>
 </details>
@@ -28,7 +33,8 @@
 </form>
 <aside class="card result"><div class="section-title"><span class="number">03</span><h2>阅读与结果</h2></div>
 <div id="empty"><div class="paper-icon">文</div><h3>一篇文章，一份证据清单</h3><p>处理进度会显示在这里。完成后可阅读文章，并下载 Markdown、HTML 和原文证据。</p><ul><li>保留 PDF 页码与逐字原文</li><li>整理主图与中文分面图注</li><li>区分研究结论与尚存局限</li></ul></div>
-<div id="progress" hidden><span id="status" class="badge"></span><h3 id="stage" aria-live="polite"></h3><p id="job-label" class="hint"></p><div id="busy" class="progress-track"><div></div></div><p id="job-error" role="alert"></p><ul id="warnings"></ul><div id="downloads" class="downloads"></div><p id="usage" class="hint"></p></div>
+<div id="progress" hidden><span id="status" class="badge"></span><h3 id="stage" aria-live="polite"></h3><p id="job-label" class="hint"></p><p id="request-status" class="hint"></p><div id="busy" class="progress-track"><div></div></div><p id="job-error" role="alert"></p><button id="resume-job" type="button" hidden>准备续跑此任务</button><ul id="warnings"></ul><div id="downloads" class="downloads"></div><p id="usage" class="hint"></p></div>
+<details><summary>最近任务</summary><button id="refresh-jobs" type="button">刷新任务列表</button><ul id="recent-jobs"></ul></details>
 <p class="review-note">自动校验检查格式、页码和引文匹配，不能代替对事实和翻译的人工核查。Markdown 引用 assets 原图，HTML 内嵌图片。建议下载整包 ZIP，以保留可编辑文章和图片。</p>
 </aside>
 </div>

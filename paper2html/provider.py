@@ -12,6 +12,10 @@ class ProviderError(RuntimeError):
     pass
 
 
+class ModelOutputError(ValueError):
+    """A successful transport with invalid model JSON can be repaired."""
+
+
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None  # Never forward an API key to a redirected endpoint.
@@ -26,6 +30,7 @@ class ModelConfig:
     timeout: int = 180
     json_mode: bool = False
     vision: bool = True
+    metadata_lookup: bool = True
 
     def __post_init__(self):
         if not isinstance(self.base_url, str):
@@ -49,7 +54,12 @@ def parse_json(text):
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?\s*", "", text)
         text = re.sub(r"\s*```$", "", text)
-    value = json.loads(text)
+    if not text:
+        raise ModelOutputError('模型返回空文本，请检查接口的文本输出配置')
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ModelOutputError(f'模型正文不是有效 JSON（第 {exc.lineno} 行、第 {exc.colno} 列）') from None
     if not isinstance(value, dict):
         raise ValueError("模型输出必须为 JSON 对象")
     return value
@@ -61,6 +71,11 @@ class CompatibleProvider:
     def __init__(self, config):
         self.config = config
         self.usage = {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0}
+        self.on_event = None
+
+    def event(self, **event):
+        if self.on_event:
+            self.on_event(**event)
 
     def complete_json(self, system, user):
         return self._complete(system, user)
@@ -89,16 +104,27 @@ class CompatibleProvider:
         endpoint = cfg.base_url if cfg.base_url.endswith("/chat/completions") else cfg.base_url + "/chat/completions"
         for attempt in range(3):
             try:
+                from .store import now
+                self.event(request_state='等待 API 响应', attempt=attempt+1, request_started_at=now())
                 request = Request(endpoint, json.dumps(body).encode(), headers=headers)
                 with build_opener(NoRedirect()).open(request, timeout=cfg.timeout) as response:
                     raw = response.read(8 * 1024 * 1024 + 1)
                     if len(raw) > 8 * 1024 * 1024:
                         raise ProviderError("API 响应超过 8 MB")
-                    result = json.loads(raw)
                 self.usage["calls"] += 1
+                if not raw.strip():
+                    raise ProviderError('API 返回空响应；请检查 Base URL 和 Chat Completions 接口')
+                try:
+                    result = json.loads(raw)
+                except (ValueError, UnicodeDecodeError):
+                    raise ProviderError('API 响应不是有效 JSON；可能返回了网页或网关错误，请检查 Base URL') from None
+                if not isinstance(result, dict):
+                    raise ProviderError('API 响应顶层必须是 JSON 对象')
                 usage = result.get("usage") or {}
                 for key in ("prompt_tokens", "completion_tokens"):
-                    self.usage[key] += int(usage.get(key) or 0)
+                    value = usage.get(key, 0) if isinstance(usage, dict) else 0
+                    if type(value) is int and value >= 0:
+                        self.usage[key] += value
                 choice = result["choices"][0]
                 if choice.get("finish_reason") in ("length", "max_tokens"):
                     raise ProviderError("模型输出被截断；请提高 max_tokens 或使用输出容量更大的模型")
@@ -111,11 +137,16 @@ class CompatibleProvider:
                     time.sleep(2 ** attempt)
                     continue
                 # Upstream response bodies may echo credentials. Do not persist them.
-                raise ProviderError(f"模型 API 返回 HTTP {exc.code}；请检查地址、密钥、额度与接口参数") from None
+                remedies = {401:'密钥无效或已过期', 403:'接口拒绝访问，请检查密钥权限、模型权限或网关限制',
+                            404:'接口路径或模型不存在，请检查 Base URL 和模型 ID',
+                            429:'服务限流或额度不足，重试后仍未成功'}
+                raise ProviderError(f"模型 API 返回 HTTP {exc.code}；" + remedies.get(exc.code, '请检查服务状态与接口参数')) from None
             except (URLError, TimeoutError, ConnectionError):
                 if attempt < 2:
                     time.sleep(2 ** attempt)
                     continue
                 raise ProviderError("模型 API 连接失败或超时，请检查网络和 API 地址") from None
-            except (KeyError, IndexError, TypeError):
+            except (KeyError, IndexError, TypeError, AttributeError):
                 raise ProviderError("API 响应格式与 Chat Completions 不兼容") from None
+            finally:
+                self.event(request_state='API 调用结束')

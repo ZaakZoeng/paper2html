@@ -9,19 +9,33 @@ import re
 import secrets
 import threading
 import uuid
+import shutil
+from dataclasses import asdict
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from .agent import Agent
-from .provider import CompatibleProvider, ModelConfig
+from .provider import CompatibleProvider, ModelConfig, ProviderError
 from .store import Store
+from . import __version__
 
 WEB = Path(__file__).parent / "web"
 MAX_PDF = 25 * 1024 * 1024
 MAX_BODY = 36 * 1024 * 1024
 METADATA_FIELDS = {"title", "authors", "journal", "journal_abbr", "publication_date", "doi", "short_name"}
+
+
+def model_config(cfg):
+    if not isinstance(cfg, dict):
+        raise ValueError('config 必须是对象')
+    return ModelConfig(base_url=cfg.get('base_url') or os.environ.get('READ4MD_BASE_URL', ''),
+        model=cfg.get('model') or os.environ.get('READ4MD_MODEL', ''),
+        api_key=cfg.get('api_key') or os.environ.get('READ4MD_API_KEY', ''),
+        max_tokens=int(cfg.get('max_tokens', 8000)), timeout=int(cfg.get('timeout', 180)),
+        json_mode=bool(cfg.get('json_mode', False)), vision=bool(cfg.get('vision', True)),
+        metadata_lookup=bool(cfg.get('metadata_lookup', True)))
 
 
 class Application:
@@ -37,9 +51,7 @@ class Application:
         cfg = payload.get("config", {})
         if not isinstance(cfg, dict):
             raise ValueError("config 必须是对象")
-        config = ModelConfig(base_url=cfg.get("base_url") or os.environ.get("READ4MD_BASE_URL", ""), model=cfg.get("model") or os.environ.get("READ4MD_MODEL", ""),
-                             api_key=cfg.get("api_key") or os.environ.get("READ4MD_API_KEY", ""), max_tokens=int(cfg.get("max_tokens", 8000)),
-                             timeout=int(cfg.get("timeout", 180)), json_mode=bool(cfg.get("json_mode", False)), vision=bool(cfg.get("vision", True)))
+        config = model_config(cfg)
         overrides = payload.get("metadata") or {}
         if not isinstance(overrides, dict) or set(overrides) - METADATA_FIELDS or any(not isinstance(v, str) or not v.strip() for v in overrides.values()):
             raise ValueError("补充出版信息只能包含指定字段的非空字符串")
@@ -62,12 +74,42 @@ class Application:
         regenerate = payload.get("regenerate", False)
         if type(regenerate) is not bool:
             raise ValueError("regenerate 必须是布尔值")
+        independent = payload.get('independent', False)
+        if type(independent) is not bool or independent and regenerate:
+            raise ValueError('独立对比与替换报告不能同时选择')
+        safe_config = asdict(config)
+        safe_config.pop('api_key')
+        pdf_hash = hashlib.sha256(pdf).hexdigest()
+        identity = {'pdf': pdf_hash, 'config': safe_config, 'metadata': overrides, 'figure_plan': figure_plan}
+        def fingerprint_for(config=None, **schema):
+            return hashlib.sha256(json.dumps({**identity, 'config': config or safe_config, **schema}, sort_keys=True,
+                ensure_ascii=False).encode('utf-8')).hexdigest()
+        fingerprint = fingerprint_for(schema=1)
+        resume_from = payload.get('resume_from') or None
+        previous = None
+        if resume_from is not None:
+            if not isinstance(resume_from, str) or not re.fullmatch('[a-f0-9]{32}', resume_from):
+                raise ValueError('续跑任务 ID 无效')
+            previous = self.store.get(resume_from)
+            if not previous or previous['status'] != 'failed':
+                raise ValueError('只能续跑已失败或重启中断的任务')
+            compatible = {fingerprint}
+            legacy_config = {k: v for k, v in safe_config.items() if k != 'metadata_lookup'}
+            if config.metadata_lookup and previous.get('version') == '0.3.0':
+                compatible.add(fingerprint_for(config=legacy_config, version='0.3.0'))
+            if config.metadata_lookup and previous.get('version') == '0.3.1':
+                compatible.add(fingerprint_for(config=legacy_config, schema=1))
+            if previous.get('fingerprint') not in compatible:
+                raise ValueError('续跑配置不一致或旧任务没有检查点：请使用相同 PDF、接口、模型、选项和补充信息，或清空续跑 ID 重新运行')
+            independent, regenerate = previous.get('independent', False), previous.get('regenerate', False)
         if not self.slots.acquire(blocking=False):
             raise RuntimeError("任务队列已满，请稍后重试")
         job_id = uuid.uuid4().hex
         try:
             self.store.create(job_id, filename, config.model)
-            if not regenerate:
+            self.store.update(job_id, independent=independent, regenerate=regenerate, fingerprint=fingerprint,
+                              endpoint=config.base_url, resume_from=resume_from, version=__version__)
+            if not regenerate and not independent:
                 existing = self.store.claim("sha256:" + hashlib.sha256(pdf).hexdigest(), job_id)
                 if existing:
                     self.store.update(job_id, status="duplicate", stage="相同 PDF 已有任务", existing_job=existing)
@@ -76,6 +118,10 @@ class Application:
             work = self.store.root / job_id
             work.mkdir(mode=0o700)
             (work / "source.pdf").write_bytes(pdf)
+            if previous:
+                checkpoints = self.store.root/resume_from/'checkpoints'
+                if checkpoints.is_dir():
+                    shutil.copytree(checkpoints, work/'checkpoints')
             future = self.pool.submit(Agent(self.store, CompatibleProvider(config)).run, job_id, overrides, regenerate, figure_plan)
             future.add_done_callback(lambda _: self.slots.release())
             return self.store.get(job_id)
@@ -89,7 +135,7 @@ class Application:
 
 def handler_for(app):
     class Handler(BaseHTTPRequestHandler):
-        server_version = "Paper2HTML/0.2"
+        server_version = "Paper2HTML/" + __version__
 
         def log_message(self, fmt, *args):
             pass  # Do not log user inputs, URLs or secrets.
@@ -119,12 +165,14 @@ def handler_for(app):
                 return self.send(403, {"error": "仅允许本机地址访问"})
             path = urlsplit(self.path).path
             if path == "/api/config":
-                return self.send(200, {"csrf_token": app.token, "max_pdf_mb": 25, "defaults": {"base_url":os.environ.get("READ4MD_BASE_URL", ""), "model":os.environ.get("READ4MD_MODEL", "")}})
+                return self.send(200, {"version": __version__, "csrf_token": app.token, "max_pdf_mb": 25, "defaults": {"base_url":os.environ.get("READ4MD_BASE_URL", ""), "model":os.environ.get("READ4MD_MODEL", "")}})
+            if path == '/api/jobs':
+                return self.send(200, {'jobs': app.store.list_jobs()})
             static = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"), "/style.css": ("style.css", "text/css; charset=utf-8")}
             if path in static:
                 filename, content_type = static[path]
                 return self.send(200, (WEB / filename).read_bytes(), content_type)
-            match = re.fullmatch(r"/api/jobs/([a-f0-9]{32})(?:/files/(markdown|html|evidence|content|validation|figures|provenance|bundle))?", path)
+            match = re.fullmatch(r"/api/jobs/([a-f0-9]{32})(?:/files/(markdown|html|evidence|content|validation|figures|provenance|bundle|diagnostics))?", path)
             if match:
                 job_id, artifact = match.groups()
                 job = app.store.get(job_id)
@@ -132,6 +180,11 @@ def handler_for(app):
                     return self.send(404, {"error": "任务不存在"})
                 if artifact is None:
                     return self.send(200, job)
+                if artifact == 'diagnostics':
+                    diagnostic = app.store.root/job_id/'diagnostics.jsonl'
+                    if diagnostic.is_file():
+                        return self.send(200, diagnostic.read_bytes(), 'application/x-ndjson; charset=utf-8', 'diagnostics.jsonl')
+                    return self.send(404, {'error': '尚无校验诊断记录'})
                 name = job.get("artifacts", {}).get(artifact)
                 if job["status"] != "completed" or not name:
                     return self.send(404, {"error": "结果尚不可用"})
@@ -151,20 +204,42 @@ def handler_for(app):
             origin = self.headers.get("Origin")
             if not self.allowed_host() or self.headers.get("X-Paper2HTML-Token") != app.token or (origin and origin != "http://" + self.headers.get("Host", "")):
                 return self.send(403, {"error": "请求来源或会话令牌无效，请刷新页面"})
-            if self.path != "/api/jobs":
+            if self.path not in ('/api/jobs', '/api/test'):
                 return self.send(404, {"error": "路径不存在"})
             if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
                 return self.send(415, {"error": "请发送 application/json"})
+            payload = {}
             try:
                 length = int(self.headers.get("Content-Length", "0"))
                 if length < 1 or length > MAX_BODY:
                     return self.send(413, {"error": "请求体为空或超过 36 MB"})
                 self.connection.settimeout(30)
                 payload = json.loads(self.rfile.read(length))
+                if self.path == '/api/test':
+                    if not isinstance(payload, dict):
+                        raise ValueError('请求必须是 JSON 对象')
+                    config = model_config(payload.get('config', {}))
+                    config.max_tokens = 1024
+                    if not app.slots.acquire(blocking=False):
+                        raise RuntimeError('任务队列已满，请稍后重试')
+                    try:
+                        provider = CompatibleProvider(config)
+                        result = provider.complete_json('只输出 JSON 对象。', '请返回 {"ok":true}')
+                        if result.get('ok') is not True:
+                            raise ValueError('接口可连接，但模型未返回预期 JSON')
+                        return self.send(200, {'ok': True, 'usage': provider.usage})
+                    finally:
+                        app.slots.release()
                 job = app.submit(payload)
                 self.send(202, job)
-            except (ValueError, TypeError, AttributeError):
+            except ValueError as exc:
+                key = str(payload.get('config', {}).get('api_key', '')) if isinstance(payload, dict) and isinstance(payload.get('config'), dict) else ''
+                message = str(exc) if not isinstance(exc, json.JSONDecodeError) else '请求不是有效 JSON'
+                self.send(400, {"error": message.replace(key, '[REDACTED]') if key else message})
+            except (TypeError, AttributeError):
                 self.send(400, {"error": "请求参数无效，请检查 PDF、API 地址、模型、token 上限和补充信息格式"})
+            except ProviderError as exc:
+                self.send(502, {'error': str(exc)})
             except RuntimeError:
                 self.send(429, {"error": "任务队列已满，请稍后重试"})
             except (TimeoutError, ConnectionError):

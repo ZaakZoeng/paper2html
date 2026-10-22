@@ -59,7 +59,7 @@ def bundle(source, pdf, root, plan_path=None, force=False):
         raise FileExistsError('Article directory exists; review it before explicit --force: '+str(final))
     if final.exists():
         marker = final/'bundle.json'
-        if not marker.is_file() or json.loads(marker.read_text()).get('format') != 'read4md-bundle-v1':
+        if not marker.is_file() or json.loads(marker.read_text(encoding='utf-8')).get('format') != 'read4md-bundle-v1':
             raise ValueError('Refusing to replace an unrelated directory')
     if plan_path:
         recorded = json.loads(Path(plan_path).read_text(encoding='utf-8')).get('source_pdf_sha256')

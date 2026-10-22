@@ -12,6 +12,10 @@ from .locking import directory_lock
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv == ['--version']:
+        from . import __version__
+        print(__version__)
+        return
     if not argv or argv[0] == 'serve' or (argv[0].startswith('-') and argv[0] not in ('-h','--help')):
         from .server import main as serve
         return serve(argv[1:] if argv and argv[0]=='serve' else argv)
@@ -28,7 +32,10 @@ def main(argv=None):
     run.add_argument('--figure-plan',type=Path,help='已核对原图区域JSON文件')
     run.add_argument('--text-only',action='store_true',help='不发送图片；复杂原图需要figure-plan')
     run.add_argument('--regenerate',action='store_true')
+    run.add_argument('--independent',action='store_true',help='同一论文独立对比运行，不替换已有报告')
+    run.add_argument('--resume-from',help='续跑失败任务 ID；需相同 PDF 和配置，重新提供密钥')
     run.add_argument('--json-mode',action='store_true')
+    run.add_argument('--offline-metadata',action='store_true',help='不向 Crossref 查询缺失的出版日期')
     run.add_argument('--max-tokens',type=int,default=12000)
     run.add_argument('--timeout',type=int,default=180)
     args=parser.parse_args(argv)
@@ -41,8 +48,9 @@ def main(argv=None):
             app.store.recover()
             payload={'filename':args.pdf.name,'pdf_base64':base64.b64encode(args.pdf.read_bytes()).decode(),
                      'config':{'base_url':args.base_url,'model':args.model,'max_tokens':args.max_tokens,
-                               'timeout':args.timeout,'vision':not args.text_only,'json_mode':args.json_mode},
-                     'regenerate':args.regenerate}
+                               'timeout':args.timeout,'vision':not args.text_only,'json_mode':args.json_mode,
+                               'metadata_lookup':not args.offline_metadata},
+                     'regenerate':args.regenerate, 'independent':args.independent, 'resume_from':args.resume_from}
             for option,key in [(args.metadata,'metadata'),(args.figure_plan,'figure_plan')]:
                 if option:payload[key]=json.loads(option.read_text(encoding='utf-8'))
             job=app.submit(payload);last=None
