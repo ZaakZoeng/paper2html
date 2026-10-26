@@ -27,6 +27,20 @@ MAX_BODY = 36 * 1024 * 1024
 METADATA_FIELDS = {"title", "authors", "journal", "journal_abbr", "publication_date", "doi", "short_name"}
 
 
+def version_status():
+    """Compare loaded code with the release on disk without importing new code."""
+    source_version = None
+    try:
+        source = Path(__file__).with_name('__init__.py').read_text(encoding='utf-8')
+        match = re.search(r'''^__version__\s*=\s*["']([^"']+)["']''', source, re.MULTILINE)
+        if match:
+            source_version = match.group(1)
+    except OSError:
+        pass
+    return {'version': __version__, 'source_version': source_version,
+            'restart_required': source_version is not None and source_version != __version__}
+
+
 def model_config(cfg):
     if not isinstance(cfg, dict):
         raise ValueError('config 必须是对象')
@@ -165,7 +179,7 @@ def handler_for(app):
                 return self.send(403, {"error": "仅允许本机地址访问"})
             path = urlsplit(self.path).path
             if path == "/api/config":
-                return self.send(200, {"version": __version__, "csrf_token": app.token, "max_pdf_mb": 25, "defaults": {"base_url":os.environ.get("READ4MD_BASE_URL", ""), "model":os.environ.get("READ4MD_MODEL", "")}})
+                return self.send(200, {**version_status(), "csrf_token": app.token, "max_pdf_mb": 25, "defaults": {"base_url":os.environ.get("READ4MD_BASE_URL", ""), "model":os.environ.get("READ4MD_MODEL", "")}})
             if path == '/api/jobs':
                 return self.send(200, {'jobs': app.store.list_jobs()})
             static = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"), "/style.css": ("style.css", "text/css; charset=utf-8")}
@@ -206,6 +220,8 @@ def handler_for(app):
                 return self.send(403, {"error": "请求来源或会话令牌无效，请刷新页面"})
             if self.path not in ('/api/jobs', '/api/test'):
                 return self.send(404, {"error": "路径不存在"})
+            if self.path == '/api/jobs' and version_status()['restart_required']:
+                return self.send(409, {"error": "项目已更新，当前后台服务仍在运行旧版本。请在启动服务的终端按 Ctrl+C，重新执行启动命令并刷新网页后续跑。"})
             if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
                 return self.send(415, {"error": "请发送 application/json"})
             payload = {}
@@ -275,7 +291,7 @@ def main(argv=None):
                             '请尝试 --port 18765，或 --port 0 自动分配端口；以启动后打印的 URL 为准。\n'
                             'Windows 可运行 netsh interface ipv4 show excludedportrange protocol=tcp 检查保留范围。\n')
             app.store.recover()
-            print(f"Read4MD / Paper2HTML: http://127.0.0.1:{server.server_port}", flush=True)
+            print(f"Read4MD / Paper2HTML v{__version__}: http://127.0.0.1:{server.server_port}", flush=True)
             print(f"报告目录: {app.store.reports}", flush=True)
             try:
                 server.serve_forever()

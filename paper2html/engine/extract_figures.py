@@ -124,6 +124,9 @@ def extract(pdf, output_dir, plan=None, dpi=180):
                 contact.close()
             ext = 'png'
             record.update(method='verified-regions', regions=provenance, dpi=dpi)
+            if item.get('fallback') == 'source-pages':
+                record.update(method='source-pages-fallback', review_status='unconfirmed',
+                              fallback_reason=item.get('fallback_reason'))
         else:
             images = [x for x in page.get_image_info(xrefs=True) if x['xref'] and fitz.Rect(x['bbox']).get_area() >= page.rect.get_area()*0.01]
             xref = item.get('xref')

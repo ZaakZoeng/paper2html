@@ -14,6 +14,13 @@ class ProviderError(RuntimeError):
 
 class ModelOutputError(ValueError):
     """A successful transport with invalid model JSON can be repaired."""
+    def __init__(self, message, output=None):
+        super().__init__(message)
+        self.output = output if isinstance(output, str) and len(output) <= 60000 else None
+
+
+class OutputTruncated(ModelOutputError, ProviderError):
+    """Repair within the user's token budget rather than silently raising it."""
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -50,7 +57,7 @@ class ModelConfig:
 
 
 def parse_json(text):
-    text = text.strip()
+    text = text.lstrip('\ufeff').strip()
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?\s*", "", text)
         text = re.sub(r"\s*```$", "", text)
@@ -59,9 +66,31 @@ def parse_json(text):
     try:
         value = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise ModelOutputError(f'模型正文不是有效 JSON（第 {exc.lineno} 行、第 {exc.colno} 列）') from None
+        # Remove only commas followed by a closing delimiter OUTSIDE strings.
+        chars, quoted, escaped = [], False, False
+        for i, char in enumerate(text):
+            if quoted:
+                chars.append(char)
+                if escaped: escaped = False
+                elif char == '\\': escaped = True
+                elif char == '"': quoted = False
+            elif char == '"':
+                quoted = True; chars.append(char)
+            elif char == ',':
+                following = i+1
+                while following < len(text) and text[following].isspace():
+                    following += 1
+                if following < len(text) and text[following] in '}]':
+                    continue
+                chars.append(char)
+            else:
+                chars.append(char)
+        try:
+            value = json.loads(''.join(chars))
+        except json.JSONDecodeError:
+            raise ModelOutputError(f'模型正文不是有效 JSON（第 {exc.lineno} 行、第 {exc.colno} 列）；请修复语法并保留原有内容', text) from None
     if not isinstance(value, dict):
-        raise ValueError("模型输出必须为 JSON 对象")
+        raise ModelOutputError("模型输出必须为 JSON 对象", text)
     return value
 
 
@@ -127,7 +156,7 @@ class CompatibleProvider:
                         self.usage[key] += value
                 choice = result["choices"][0]
                 if choice.get("finish_reason") in ("length", "max_tokens"):
-                    raise ProviderError("模型输出被截断；请提高 max_tokens 或使用输出容量更大的模型")
+                    raise OutputTruncated("模型输出被截断；请压缩非必要措辞，优先保留必需结构、证据和图号，不要重复输出由程序装配的内容", choice.get('message', {}).get('content'))
                 content = choice["message"].get("content")
                 if not isinstance(content, str):
                     raise ProviderError("API 未返回文本，请确认模型支持 Chat Completions 文本输出")

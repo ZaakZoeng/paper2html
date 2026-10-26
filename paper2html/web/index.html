@@ -21,13 +21,13 @@
 <label>配图计划（JSON，可选）<textarea id="figure_plan" rows="3" placeholder='{"figures":[{"source":"Figure 1","pdf_page":3,"clip":[50,80,550,500]}]}'></textarea></label>
 <p class="hint">纯文本 API 可关闭视觉核对。单张完整位图会自动提取；矢量或复合图需要提供已检查的区域。坐标使用 PDF 点。</p>
 <label class="check"><input id="json_mode" type="checkbox">接口支持 JSON mode（可选）</label>
-<label class="check"><input id="metadata_lookup" type="checkbox" checked>PDF 缺少发表日期时查询 Crossref（仅发送 DOI，不发送论文或密钥）</label>
+<label class="check"><input id="metadata_lookup" type="checkbox" checked>期刊论文缺少正式发表日期时查询 Crossref（仅发送 DOI，不发送论文或密钥）</label>
 <label class="check"><input id="regenerate" type="checkbox">忽略已有结果，重新生成此论文</label>
 <label class="check"><input id="independent" type="checkbox">独立对比运行（不替换已有报告，可比较不同 API）</label>
 <label>续跑失败任务 ID（可选）<input id="resume_from" autocomplete="off" placeholder="填写失败任务 ID，复用已通过校验的步骤"></label>
 <p class="hint">续跑需重新选择相同 PDF，并填写相同接口、模型、选项和补充信息；密钥可以重新提供。旧版本任务不支持续跑。</p>
 <label>补充出版信息（JSON，可选）<textarea id="metadata" rows="4" placeholder='{"publication_date":"20260101"}'></textarea></label>
-<p class="hint">仅在 PDF 缺失信息时填写。支持 title、authors、journal、journal_abbr、publication_date（YYYYMMDD）、doi、short_name。补充信息按用户提供记录，不视为原文已核实。</p>
+<p class="hint">仅在 PDF 缺失信息时填写。支持 title、authors、journal、journal_abbr、publication_date（YYYYMMDD）、doi、short_name。期刊论文填写正式发表日期，预印本填写当前版本发布日期；预印本不强制要求期刊或 DOI，未确认版本日期不推测。补充信息按用户提供记录，不视为原文已核实。</p>
 </details>
 <button id="submit" type="submit">开始阅读 <span>→</span></button><p id="error" role="alert"></p>
 </form>

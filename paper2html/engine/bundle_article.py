@@ -14,6 +14,7 @@ from .render_markdown import build_markdown, safe_component, validate_content
 from .render_html import build as build_html
 from .validate_html import validate_html
 from .validate_markdown import validate as validate_markdown
+from ..publication import date_component
 
 
 def convert_markdown(source, figures):
@@ -36,12 +37,12 @@ def stem_for(source, content):
     if content is not None:
         short = validate_content(content)
         m = content['metadata']
-        stem = m['publication_date']+'_'+safe_component(m['journal_abbr'])+'_'+safe_component(short)
+        stem = date_component(m)+'_'+safe_component(m['journal_abbr'])+'_'+safe_component(short)
     else:
         stem = source.stem
-    if not re.fullmatch(r'\d{8}_[A-Za-z0-9._-]+_[A-Za-z0-9._-]+', stem) or len(stem) > 180:
+    if not re.fullmatch(r'(?:\d{8}|undated)_[A-Za-z0-9._-]+_[A-Za-z0-9._-]+', stem) or len(stem) > 180:
         raise ValueError('Paper directory must use YYYYMMDD_Journal_ShortName')
-    datetime.strptime(stem[:8], '%Y%m%d')
+    if not stem.startswith('undated_'): datetime.strptime(stem[:8], '%Y%m%d')
     return stem
 
 

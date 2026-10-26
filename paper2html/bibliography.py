@@ -9,6 +9,7 @@ from urllib.request import Request, build_opener
 
 from .render import safe_component
 from .provider import NoRedirect
+from .publication import ARXIV_ID, is_preprint, reference_url
 
 
 class MissingPublicationDate(ValueError):
@@ -16,6 +17,7 @@ class MissingPublicationDate(ValueError):
 
 
 def normalized_doi(value):
+    if not value: return ''
     return re.sub(r'^(?:https?://(?:dx\.)?doi\.org/|doi:\s*)', '', str(value).strip(), flags=re.I).rstrip('.,;。；').lower()
 
 
@@ -27,7 +29,7 @@ def filename_labels(metadata):
     """These are output labels, not bibliographic facts or official abbreviations."""
     generated = {}
     for field, base, fallback in (
-        ('journal_abbr', metadata.get('journal', ''), 'Journal'),
+        ('journal_abbr', metadata.get('preprint_server') if is_preprint(metadata) else metadata.get('journal', ''), 'Journal'),
         ('short_name', metadata.get('title', ''), 'Paper'),
     ):
         if isinstance(metadata.get(field), str) and safe_component(metadata[field]) and len(safe_component(metadata[field])) <= 80:
@@ -35,7 +37,7 @@ def filename_labels(metadata):
         base = base if isinstance(base, str) else ''
         ascii_base = unicodedata.normalize('NFKD', base).encode('ascii', 'ignore').decode('ascii')
         label = safe_component(ascii_base)
-        digest = hashlib.sha256((normalized_doi(metadata.get('doi', '')) or base or fallback).encode('utf-8')).hexdigest()[:8]
+        digest = hashlib.sha256((normalized_doi(metadata.get('doi', '')) or metadata.get('preprint_id') or base or fallback).encode('utf-8')).hexdigest()[:8]
         if field == 'short_name':
             label = (label[:32].rstrip('._-') or fallback) + '-' + digest
         elif not label:
@@ -141,6 +143,8 @@ def select_metadata_pages(pages, limit=36000):
 
 def complete_publication_date(result, pages, allow_lookup=True, lookup=None):
     metadata = result['metadata']
+    if is_preprint(metadata):
+        return  # Version date is extracted from this PDF; never replace it with a journal record.
     if metadata.get('publication_date'):
         return
     candidates = pdf_publication_dates(pages)
@@ -161,3 +165,76 @@ def complete_publication_date(result, pages, allow_lookup=True, lookup=None):
     metadata['publication_date'] = source['date']
     result['publication_source'] = source
     result['date_basis'] = ('PDF 正式发表日期' if source['source'] == 'PDF' else 'Crossref '+source['field']+'；外部登记记录，不属于 PDF 原文证据')
+
+
+def identify_preprint(result, pages, overrides=None):
+    """Use first-page repository markers, never a bibliography citation or DOI date."""
+    overrides = overrides or {}
+    metadata = result['metadata']
+    front = {p: text for p, text in pages.items() if p == 1}
+    server = identifier = marker = None
+    date_sources = []
+    doi_source = None
+    date_pattern = r'(?:\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}\s+[A-Za-z]+\.?\s+\d{4}|[A-Za-z]+\.?\s+\d{1,2},?\s+\d{4})'
+    for page, text in front.items():
+        match = re.search(r'(?im)^\s*(bioRxiv|medRxiv)\s+preprint\b', text)
+        arxiv = re.search(r'(?im)^\s*arXiv\s*:\s*('+ARXIV_ID+r')\b', text)
+        if match:
+            current = 'bioRxiv' if match[1].lower() == 'biorxiv' else 'medRxiv'
+            if server and server != current: raise ValueError('预印本平台标识冲突，请核查 PDF')
+            server = current; marker = marker or {'pages':[page], 'quote':match[0]}
+            context = text[max(0, match.start()-1000):match.end()+400]
+            links = list(re.finditer(r'https?://doi\.org/(10\.\d{4,9}/[^\s<>]+)', context, re.I))
+            if len({normalized_doi(m[1]) for m in links}) == 1:
+                doi_source = {'doi':normalized_doi(links[0][1]),'pages':[page],'quote':links[0][0]}
+            for posted in re.finditer(r'this\s+version\s+posted\s+('+date_pattern+r')', text, re.I):
+                date = parse_date(posted[1])
+                if date: date_sources.append({'date':date,'pdf_page':page,'quote':posted[0]})
+        elif arxiv:
+            if server and server != 'arXiv': raise ValueError('预印本平台标识冲突，请核查 PDF')
+            server = 'arXiv'
+            if identifier and identifier != arxiv[1]: raise ValueError('PDF 含多个不同 arXiv 版本标识，请核查')
+            identifier = arxiv[1]
+            context = text[arxiv.end():arxiv.end()+100]
+            date_match = re.search(date_pattern, context)
+            end = arxiv.end()+(date_match.end() if date_match else 0)
+            marker = marker or {'pages':[page], 'quote':text[arxiv.start():max(end,arxiv.end())].strip()}
+            if date_match and parse_date(date_match[0]):
+                date_sources.append({'date':parse_date(date_match[0]),'pdf_page':page,'quote':text[arxiv.start():end].strip()})
+    if not server:
+        # Do not trust a model-generated preprint flag without a PDF repository marker.
+        for field in ('publication_type','preprint_server','preprint_id','date_kind','source_url'):
+            metadata.pop(field, None)
+        return False
+    metadata.update(publication_type='preprint',preprint_server=server,date_kind='preprint_version')
+    if identifier: metadata['preprint_id'] = identifier
+    metadata['journal_abbr'] = overrides.get('journal_abbr') or server
+    if 'journal_abbr' not in overrides:
+        result.setdefault('generated_labels', {})['journal_abbr'] = server
+    evidence = result.setdefault('metadata_evidence', [])
+    def replace_evidence(field, anchor):
+        evidence[:] = [e for e in evidence if e.get('field') != field]
+        evidence.append({'field':field, **anchor})
+    replace_evidence('preprint_server', marker)
+    if doi_source and 'doi' not in overrides:
+        metadata['doi'] = doi_source['doi']
+        replace_evidence('doi',{'pages':doi_source['pages'],'quote':doi_source['quote']})
+    if identifier:
+        replace_evidence('preprint_id',marker)
+    if 'publication_date' in overrides:
+        metadata['publication_date'] = overrides['publication_date']
+        result['publication_source'] = {'source':'user','date':overrides['publication_date'],'kind':'preprint_version','server':server}
+    else:
+        dates = {d['date'] for d in date_sources}
+        if len(dates) > 1:
+            raise MissingPublicationDate('预印本存在多个版本发布日期，请补充 publication_date 确认当前版本日期，不是正式发表日期')
+        selected = date_sources[0] if date_sources else None
+        metadata['publication_date'] = selected['date'] if selected else None
+        evidence[:] = [e for e in evidence if e.get('field') != 'publication_date']
+        if selected:
+            replace_evidence('publication_date',{'pages':[selected['pdf_page']],'quote':selected['quote']})
+        result['publication_source'] = {'source':'PDF','kind':'preprint_version','server':server,
+                                        **(selected or {'date':None,'status':'unknown'})}
+    metadata['source_url'] = reference_url(metadata)
+    result['date_basis'] = '预印本当前版本发布日期；不是正式期刊发表日期' if metadata['publication_date'] else '预印本版本日期未确认，输出目录使用 undated，不推测日期'
+    return True

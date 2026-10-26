@@ -35,6 +35,8 @@ Use UTF-8 JSON. Metadata and evidence retain PDF provenance; the article's visib
 
 Require all metadata fields used above except `source_pdf`. Date must be a real calendar date in `YYYYMMDD`. For supported historical content, `model_name` can supply a missing `short_name`. The Markdown renderer adds `# 期刊缩写｜标题内容` and the fixed opening citation, so do not add a journal prefix to `article.headline`.
 
+For identified preprints (`publication_type="preprint"`), `preprint_server` names the repository, `journal` and `doi` may be null, and `source_url` supplies the verified DOI or versioned arXiv link. `publication_date` means the PDF version's posting date, never formal journal publication; it may be null when not explicitly available. Do not invent journal information, a DOI, a date or peer-review status. The program adds a visible preprint notice.
+
 Require exactly one `论文一句话`, at least one `研究背景`, and dedicated `conclusion` / `reference` fields rather than repeated conclusion/reference sections. Ground quantitative, comparative and limitation claims in the evidence list; unknown values must not be invented.
 
 Each numbered main figure appears once. `source` retains the source label (e.g. `Figure 3A-G`), `pdf_page` is a one-based PDF page and `caption_zh` is a nonempty array covering all panels, lead-in text, sample sizes, metrics, conditions and abbreviations. Optional `clip`, `regions` or `xref` fields can supply a verified extraction plan; see `figure-extraction.md`. Readable main captions are mandatory; supplementary content is optional unless material.

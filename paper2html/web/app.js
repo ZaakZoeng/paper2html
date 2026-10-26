@@ -1,4 +1,5 @@
 'use strict';
+const PAGE_VERSION = '0.4.2';
 const $ = id => document.getElementById(id);
 let csrf = '', polling = 0;
 let currentJob = null;
@@ -29,7 +30,8 @@ async function poll(id, generation) {
     const waiting = job.request_state === '等待 API 响应' && Number.isFinite(started);
     $('request-status').textContent = [job.chunks_total ? `已完成阅读 ${job.chunks_completed}/${job.chunks_total} 块` : '',
       job.request_state || '', waiting ? `等待 ${Math.max(0, Math.floor((Date.now()-started)/1000))} 秒 · 请求尝试 ${job.attempt}` : '',
-      job.repair_attempt ? `校验修复 ${job.repair_attempt}/2` : '', job.checkpoint_reused ? '已复用通过校验的检查点' : ''].filter(Boolean).join(' · ');
+      job.repair_attempt ? `校验修复 ${job.repair_attempt}/2` : '', job.checkpoint_reused ? '已复用通过校验的检查点' : '',
+      job.metadata?.publication_type === 'preprint' ? `预印本 · ${job.metadata.preprint_server} · 版本日期 ${job.metadata.publication_date || '未确认'}` : '', job.recovery_notice || ''].filter(Boolean).join(' · ');
     $('job-error').textContent = job.error || '';
     $('warnings').replaceChildren(); $('downloads').replaceChildren();
     for (const warning of job.warnings || []) { const li = document.createElement('li'); li.textContent = warning; $('warnings').append(li); }
@@ -43,6 +45,9 @@ async function poll(id, generation) {
       link('证据清单', base + 'evidence'); link('校验报告', base + 'validation');
       if (job.publication_source?.source === 'Crossref' && job.publication_source.url?.startsWith('https://api.crossref.org/works/')) {
         link('发表日期来源：Crossref', job.publication_source.url, true);
+      }
+      if (job.metadata?.publication_type === 'preprint' && /^https:\/\/(doi\.org\/10\.|arxiv\.org\/abs\/)/.test(job.metadata.source_url || '')) {
+        link('预印本来源 ↗', job.metadata.source_url, true);
       }
     }
     if (job.status === 'duplicate') {
@@ -70,7 +75,11 @@ function configFromForm() {
     metadata_lookup:$('metadata_lookup').checked};
 }
 async function post(path, body) {
-  if (!csrf) csrf = (await request('/api/config')).csrf_token;
+  const server = await request('/api/config');
+  csrf = server.csrf_token;
+  if (path === '/api/jobs' && (server.restart_required || server.version !== PAGE_VERSION)) {
+    throw new Error('页面版本 v' + PAGE_VERSION + '，后台服务版本 v' + server.version + '。请在启动服务的终端按 Ctrl+C，重新执行启动命令并刷新网页后续跑；本次未创建任务、未调用模型');
+  }
   return request(path, {method:'POST', headers:{'Content-Type':'application/json','X-Paper2HTML-Token':csrf}, body:JSON.stringify(body)});
 }
 $('test-api').addEventListener('click', async () => {
@@ -118,4 +127,4 @@ $('form').addEventListener('submit', async event => {
   finally { $('submit').disabled = false; }
 });
 window.addEventListener('hashchange', followHash);
-request('/api/config').then(c => { csrf = c.csrf_token; $('base_url').value = c.defaults?.base_url || ''; $('model').value = c.defaults?.model || ''; document.querySelector('.badge').textContent = '本地工作空间 · v' + c.version; followHash(); refreshJobs(); }).catch(e => { $('error').textContent = e.message; });
+request('/api/config').then(c => { csrf = c.csrf_token; $('base_url').value = c.defaults?.base_url || ''; $('model').value = c.defaults?.model || ''; document.querySelector('.badge').textContent = '本地工作空间 · 服务 v' + c.version; if (c.restart_required || c.version !== PAGE_VERSION) $('error').textContent = `页面版本 v${PAGE_VERSION}，后台服务版本 v${c.version}。请在启动服务的终端按 Ctrl+C，重新执行启动命令并刷新网页后续跑。`; followHash(); refreshJobs(); }).catch(e => { $('error').textContent = e.message; });

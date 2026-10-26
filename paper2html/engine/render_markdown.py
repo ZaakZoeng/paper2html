@@ -5,6 +5,7 @@ import json
 import re
 from pathlib import Path
 from .figure_format import figure_id, public_caption, write_file
+from ..publication import is_preprint, reference_url, date_component, preprint_notice
 
 
 def safe_component(value):
@@ -26,12 +27,10 @@ def validate_content(data):
         if key not in data:
             raise ValueError("Missing content key: {}".format(key))
     metadata = data["metadata"]
-    for key in ("title", "journal_abbr", "publication_date", "authors", "journal", "doi", "one_line_summary"):
+    for key in (("title", "journal_abbr", "authors", "preprint_server", "one_line_summary") if is_preprint(metadata) else ("title", "journal_abbr", "publication_date", "authors", "journal", "doi", "one_line_summary")):
         if not metadata.get(key):
             raise ValueError("Missing metadata key: {}".format(key))
-    if not re.fullmatch(r"\d{8}", metadata["publication_date"]):
-        raise ValueError("publication_date must be YYYYMMDD")
-    datetime.strptime(metadata["publication_date"], "%Y%m%d")
+    date_component(metadata)
     short_name = metadata.get("short_name") or metadata.get("model_name")
     if not short_name:
         raise ValueError("Missing metadata key: short_name")
@@ -44,7 +43,7 @@ def validate_content(data):
         for separator in ("|", "｜")
     ):
         raise ValueError("article.headline must not include the journal prefix or separator")
-    doi_url(metadata["doi"])
+    reference_url(metadata)
     headings = [section.get("heading") for section in article["sections"]]
     if headings.count("论文一句话") != 1:
         raise ValueError("Article must contain exactly one 论文一句话 section")
@@ -87,10 +86,11 @@ def build_markdown(data, figures=None):
         "# {}｜{}".format(metadata["journal_abbr"], article["headline"]),
         "",
         "本文分享一篇{}文章——《{}》，[引文链接]({})。".format(
-            metadata["journal_abbr"], metadata["title"], doi_url(metadata["doi"])
+            metadata["journal_abbr"], metadata["title"], reference_url(metadata)
         ),
         "",
     ]
+    if is_preprint(metadata): lines.extend([preprint_notice(metadata), ''])
     if article.get("deck"):
         lines.extend(["*{}*".format(article["deck"]), ""])
     for paragraph in article.get("lead", []):
@@ -111,6 +111,8 @@ def build_markdown(data, figures=None):
                 raise ValueError(key + ': extract the original image before rendering an illustrated article')
             if Path(asset).is_absolute() or '..' in Path(asset).parts or not asset.startswith('assets/'):
                 raise ValueError('Figure asset must be relative to the article directory under assets/')
+            if figure.get('preview_status') == 'source-pages':
+                lines.extend(['> **原页预览**：自动裁切未确认完整，以下保留相关原页，需对照核查。', ''])
             lines.extend(['![' + key + '](' + asset + ')', '', public_caption(figure), ''])
 
     lines.extend(["## 结语", ""])
@@ -131,7 +133,7 @@ def main():
     short_name = validate_content(data)
     metadata = data["metadata"]
     stem = "{}_{}_{}".format(
-        metadata["publication_date"],
+        date_component(metadata),
         safe_component(metadata["journal_abbr"]),
         safe_component(short_name),
     )

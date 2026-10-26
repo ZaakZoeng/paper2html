@@ -5,6 +5,7 @@ import hashlib
 import re
 from pathlib import Path
 from .figure_format import find_figures, figure_id
+from ..publication import ARXIV_ID
 
 
 def validate(path, legacy=False):
@@ -18,7 +19,7 @@ def validate(path, legacy=False):
         raise ValueError("Title must use: # 期刊缩写｜标题内容")
     opening = re.match(
         r"本文分享一篇(?P<journal>.+?)文章——《(?P<paper_title>.+)》，"
-        r"\[引文链接\]\(https://doi\.org/10\.\d{4,9}/[^\s)]+\)。(?:\n\n|\Z)",
+        r"\[引文链接\]\((?:https://doi\.org/10\.\d{4,9}/[^\s)]+|https://arxiv\.org/abs/"+ARXIV_ID+r")\)。(?:\n\n|\Z)",
         text[title.end():],
     )
     if not opening:
@@ -29,8 +30,10 @@ def validate(path, legacy=False):
     for required in ("论文一句话", "研究背景", "结语", "原文信息"):
         if required not in headings:
             raise ValueError("Markdown is missing required section: {}".format(required))
-    if not re.search(r"https://doi\.org/10\.\d{4,9}/", text, re.I):
-        raise ValueError("Markdown is missing a DOI link")
+    if not re.search(r"https://doi\.org/10\.\d{4,9}/|https://arxiv\.org/abs/"+ARXIV_ID, text, re.I):
+        raise ValueError("Markdown is missing a verified source link")
+    if 'https://arxiv.org/abs/' in opening.group(0) and '**预印本**' not in text:
+        raise ValueError('arXiv source requires a visible preprint notice')
     if any(entity in text for entity in ("&amp;", "&lt;", "&gt;")):
         raise ValueError("Markdown contains unexpanded HTML entities")
     if legacy:
